@@ -1,0 +1,115 @@
+From 35ba2b56aa907f0e0dac7cda081bbbaf56018c7b Mon Sep 17 00:00:00 2001
+From: Valentin Raevsky <valentin@compulab.co.il>
+Date: Sun, 23 Aug 2026 19:23:22 +0000
+Subject: [PATCH] ARM: dts: am437x-cm-t43: add legacy Atheros PHY variants
+
+Add CM-T43 and SBC-T43 device-tree variants for legacy modules with Qualcomm Atheros PHYs at MDIO addresses 0 and 1. Reuse the CM-T43 clock and active-low reset initialization while restoring the legacy rgmii-txid configuration.
+
+Upstream-Status: Pending
+Signed-off-by: Valentin Raevsky <valentin@compulab.co.il>
+---
+ arch/arm/boot/dts/ti/omap/Makefile            |  2 +
+ .../dts/ti/omap/am437x-cm-t43-legacy-phy.dtsi | 37 +++++++++++++++++++
+ .../boot/dts/ti/omap/am437x-cm-t43-legacy.dts | 11 ++++++
+ .../dts/ti/omap/am437x-sbc-t43-legacy.dts     | 11 ++++++
+ 4 files changed, 61 insertions(+)
+ create mode 100644 arch/arm/boot/dts/ti/omap/am437x-cm-t43-legacy-phy.dtsi
+ create mode 100644 arch/arm/boot/dts/ti/omap/am437x-cm-t43-legacy.dts
+ create mode 100644 arch/arm/boot/dts/ti/omap/am437x-sbc-t43-legacy.dts
+
+diff --git a/arch/arm/boot/dts/ti/omap/Makefile b/arch/arm/boot/dts/ti/omap/Makefile
+index 241adfec7193..fb48186648ff 100644
+--- a/arch/arm/boot/dts/ti/omap/Makefile
++++ b/arch/arm/boot/dts/ti/omap/Makefile
+@@ -125,10 +125,12 @@ dtb-$(CONFIG_SOC_AM33XX) += \
+ dtb-$(CONFIG_SOC_AM43XX) += \
+ 	am43x-epos-evm.dtb \
+ 	am437x-cm-t43.dtb \
++	am437x-cm-t43-legacy.dtb \
+ 	am437x-gp-evm.dtb \
+ 	am437x-gp-evm-hdmi.dtb \
+ 	am437x-idk-evm.dtb \
+ 	am437x-sbc-t43.dtb \
++	am437x-sbc-t43-legacy.dtb \
+ 	am437x-sk-evm.dtb
+ 
+ am57xx-evm-dtbs := am57xx-beagle-x15.dtb am57xx-evm.dtbo
+diff --git a/arch/arm/boot/dts/ti/omap/am437x-cm-t43-legacy-phy.dtsi b/arch/arm/boot/dts/ti/omap/am437x-cm-t43-legacy-phy.dtsi
+new file mode 100644
+index 000000000000..f78bf68a4114
+--- /dev/null
++++ b/arch/arm/boot/dts/ti/omap/am437x-cm-t43-legacy-phy.dtsi
+@@ -0,0 +1,37 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Ethernet PHY configuration for legacy CM-T43 modules.
++ *
++ * Legacy modules use Qualcomm Atheros PHYs at MDIO addresses 0 and 1.
++ */
++
++&davinci_mdio_sw {
++	/delete-node/ ethernet-phy@4;
++	/delete-node/ ethernet-phy@5;
++
++	legacy_ethphy0: ethernet-phy@0 {
++		compatible = "ethernet-phy-ieee802.3-c22";
++		reg = <0>;
++		reset-gpios = <&gpio5 10 GPIO_ACTIVE_LOW>;
++		reset-assert-us = <20000>;
++		reset-deassert-us = <100000>;
++	};
++
++	legacy_ethphy1: ethernet-phy@1 {
++		compatible = "ethernet-phy-ieee802.3-c22";
++		reg = <1>;
++		reset-gpios = <&gpio5 8 GPIO_ACTIVE_LOW>;
++		reset-assert-us = <20000>;
++		reset-deassert-us = <100000>;
++	};
++};
++
++&cpsw_port1 {
++	phy-handle = <&legacy_ethphy0>;
++	phy-mode = "rgmii-txid";
++};
++
++&cpsw_port2 {
++	phy-handle = <&legacy_ethphy1>;
++	phy-mode = "rgmii-txid";
++};
+diff --git a/arch/arm/boot/dts/ti/omap/am437x-cm-t43-legacy.dts b/arch/arm/boot/dts/ti/omap/am437x-cm-t43-legacy.dts
+new file mode 100644
+index 000000000000..4437264f677f
+--- /dev/null
++++ b/arch/arm/boot/dts/ti/omap/am437x-cm-t43-legacy.dts
+@@ -0,0 +1,11 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (C) 2015 CompuLab, Ltd. - https://www.compulab.co.il/
++ */
++
++#include "am437x-cm-t43.dts"
++#include "am437x-cm-t43-legacy-phy.dtsi"
++
++/ {
++	model = "CompuLab CM-T43 (legacy Atheros PHY)";
++};
+diff --git a/arch/arm/boot/dts/ti/omap/am437x-sbc-t43-legacy.dts b/arch/arm/boot/dts/ti/omap/am437x-sbc-t43-legacy.dts
+new file mode 100644
+index 000000000000..f9d3be962ec4
+--- /dev/null
++++ b/arch/arm/boot/dts/ti/omap/am437x-sbc-t43-legacy.dts
+@@ -0,0 +1,11 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (C) 2015 CompuLab, Ltd. - https://www.compulab.co.il/
++ */
++
++#include "am437x-sbc-t43.dts"
++#include "am437x-cm-t43-legacy-phy.dtsi"
++
++/ {
++	model = "CompuLab CM-T43 on SB-SOM-T43 (legacy Atheros PHY)";
++};
+-- 
+2.43.0
