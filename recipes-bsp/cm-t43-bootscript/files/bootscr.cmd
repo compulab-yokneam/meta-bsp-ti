@@ -1,7 +1,6 @@
 echo Booting CM-T43 from SD card ...
 
 setenv kernel zImage
-setenv fdtfile am437x-sbc-t43.dtb
 setenv bootargs console=${console} root=/dev/mmcblk0p2 rw rootfstype=ext4 rootwait
 
 if load mmc 0:1 ${loadaddr} ${kernel}; then
