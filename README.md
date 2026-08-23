@@ -1,9 +1,9 @@
 # CM-T43 TI Processor SDK build guide
 
 This layer adds CompuLab CM-T43 support to TI Processor SDK Linux. It provides
-the `cm-t43` machine, carries the CM-T43 Linux 6.18 patches, creates the legacy
-U-Boot `bootscr.img`, and produces a compressed SD-card image and a `tar.bz2`
-root filesystem archive.
+the `cm-t43` machine, carries the CM-T43 Linux 6.18 patches, builds CompuLab's
+CM-T43 U-Boot and the legacy `bootscr.img`, and produces a compressed SD-card
+image and a `tar.bz2` root filesystem archive.
 
 The layer is intended for the following configuration:
 
@@ -169,6 +169,15 @@ To build only the U-Boot SD-card script, run:
 bitbake cm-t43-bootscript
 ```
 
+To build only the CM-T43 U-Boot (`MLO` and `u-boot.img`), run:
+
+```bash
+bitbake u-boot-compulab-cm-t43
+```
+
+The recipe uses `${AUTOREV}` with CompuLab's `cm-t43/dev` branch, so each build
+fetches and uses the latest commit available on that branch.
+
 To perform a dry run of the complete image task graph without executing the
 pending tasks, run:
 
@@ -190,6 +199,8 @@ List the required artifacts with:
 ls -lh "${TISDK_ROOT}/build/deploy-ti/images/cm-t43/"*wic.xz
 ls -lh "${TISDK_ROOT}/build/deploy-ti/images/cm-t43/"*tar.bz2
 ls -lh "${TISDK_ROOT}/build/deploy-ti/images/cm-t43/bootscr.img"
+ls -lh "${TISDK_ROOT}/build/deploy-ti/images/cm-t43/MLO"
+ls -lh "${TISDK_ROOT}/build/deploy-ti/images/cm-t43/u-boot.img"
 ```
 
 The stable image links are expected to be named:
@@ -203,10 +214,10 @@ The `.wic.xz` file is the compressed, partitioned SD-card image. The
 `.tar.bz2` file contains the root filesystem for extraction or installation by
 another deployment process.
 
-The WIC image places `bootscr.img`, `zImage`, and `am437x-sbc-t43.dtb` in its
-first FAT partition. The default CM-T43 U-Boot environment loads and executes
-`bootscr.img`; the script boots the root filesystem from the second SD-card
-partition.
+The WIC image places `MLO`, `u-boot.img`, `bootscr.img`, `zImage`, and
+`am437x-sbc-t43.dtb` in its first FAT partition. The default CM-T43 U-Boot
+environment loads and executes `bootscr.img`; the script boots the root
+filesystem from the second SD-card partition.
 
 ## 7. Re-enter an existing build
 

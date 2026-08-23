@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Valentin Raevsky <valentin@compulab.co.il>
+Date: Sun, 23 Aug 2026 00:00:00 +0000
+Subject: [PATCH] compiler-gcc: use GCC 5 definitions for newer compilers
+
+This U-Boot version expects a separate compiler-gccN.h header for every
+GCC major release.  Its GCC 5 definitions are also suitable for later
+compilers, so use them instead of requiring duplicate headers through GCC
+15 and beyond.
+
+Upstream-Status: Inappropriate [legacy U-Boot compatibility]
+Signed-off-by: Valentin Raevsky <valentin@compulab.co.il>
+---
+ include/linux/compiler-gcc.h | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/include/linux/compiler-gcc.h b/include/linux/compiler-gcc.h
+index e057bd2..872836a 100644
+--- a/include/linux/compiler-gcc.h
++++ b/include/linux/compiler-gcc.h
+@@ -111,7 +111,11 @@
+ #define __gcc_header(x) #x
+ #define _gcc_header(x) __gcc_header(linux/compiler-gcc##x.h)
+ #define gcc_header(x) _gcc_header(x)
++#if __GNUC__ > 5
++#include <linux/compiler-gcc5.h>
++#else
+ #include gcc_header(__GNUC__)
++#endif
+-
++
+ #if !defined(__noclone)
+ #define __noclone	/* not needed */
