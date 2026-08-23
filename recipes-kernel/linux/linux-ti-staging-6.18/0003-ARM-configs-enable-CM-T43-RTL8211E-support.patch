@@ -1,0 +1,54 @@
+From 637e44b023528a147425078716b59de678df6e84 Mon Sep 17 00:00:00 2001
+From: Valentin Raevsky <valentin@compulab.co.il>
+Date: Sun, 23 Aug 2026 09:32:25 +0000
+Subject: [PATCH 3/3] ARM: configs: enable CM-T43 RTL8211E support
+
+Build the CM-T43 MDIO initialization helper and Realtek PHY driver into the multi_v7 and OMAP2+ kernels.
+
+Upstream-Status: Pending
+Signed-off-by: Valentin Raevsky <valentin@compulab.co.il>
+---
+ arch/arm/configs/multi_v7_defconfig  | 2 ++
+ arch/arm/configs/omap2plus_defconfig | 2 ++
+ 2 files changed, 4 insertions(+)
+
+diff --git a/arch/arm/configs/multi_v7_defconfig b/arch/arm/configs/multi_v7_defconfig
+index 8419f8079391..baffb1b4df3d 100644
+--- a/arch/arm/configs/multi_v7_defconfig
++++ b/arch/arm/configs/multi_v7_defconfig
+@@ -284,6 +284,7 @@ CONFIG_STMMAC_ETH=y
+ CONFIG_DWMAC_DWC_QOS_ETH=y
+ CONFIG_TI_CPSW=y
+ CONFIG_TI_CPSW_SWITCHDEV=y
++CONFIG_TI_DAVINCI_MDIO_CM_T43=y
+ CONFIG_TI_CPTS=y
+ CONFIG_TI_KEYSTONE_NETCP=y
+ CONFIG_TI_KEYSTONE_NETCP_ETHSS=y
+@@ -295,6 +296,7 @@ CONFIG_BROADCOM_PHY=y
+ CONFIG_ICPLUS_PHY=y
+ CONFIG_MARVELL_PHY=y
+ CONFIG_AT803X_PHY=y
++CONFIG_REALTEK_PHY=y
+ CONFIG_ROCKCHIP_PHY=y
+ CONFIG_DP83867_PHY=y
+ CONFIG_CAN_AT91=m
+diff --git a/arch/arm/configs/omap2plus_defconfig b/arch/arm/configs/omap2plus_defconfig
+index 4e53c331cd84..1b9e4e932285 100644
+--- a/arch/arm/configs/omap2plus_defconfig
++++ b/arch/arm/configs/omap2plus_defconfig
+@@ -322,11 +322,13 @@ CONFIG_SMSC911X=y
+ CONFIG_TI_DAVINCI_EMAC=y
+ CONFIG_TI_CPSW=y
+ CONFIG_TI_CPSW_SWITCHDEV=y
++CONFIG_TI_DAVINCI_MDIO_CM_T43=y
+ CONFIG_TI_CPTS=y
+ # CONFIG_NET_VENDOR_VIA is not set
+ # CONFIG_NET_VENDOR_WIZNET is not set
+ CONFIG_MICREL_PHY=y
+ CONFIG_AT803X_PHY=y
++CONFIG_REALTEK_PHY=y
+ CONFIG_SMSC_PHY=y
+ CONFIG_DP83848_PHY=y
+ CONFIG_DP83867_PHY=y
+-- 
+2.43.0

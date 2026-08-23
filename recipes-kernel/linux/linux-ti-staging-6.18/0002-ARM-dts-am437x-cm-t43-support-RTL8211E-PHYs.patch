@@ -1,0 +1,111 @@
+From 0bafaee56ea34b61ece3fda8380cef75c84ffa80 Mon Sep 17 00:00:00 2001
+From: Valentin Raevsky <valentin@compulab.co.il>
+Date: Sun, 23 Aug 2026 09:30:57 +0000
+Subject: [PATCH 2/3] ARM: dts: am437x-cm-t43: support RTL8211E PHYs
+
+Describe the RTL8211E PHYs at addresses 4 and 5, including their active-low reset and interrupt GPIOs. Enable the CM-T43 MDIO initialization sequence and configure PHY-side RGMII delays in both directions.
+
+Upstream-Status: Pending
+Signed-off-by: Valentin Raevsky <valentin@compulab.co.il>
+---
+ arch/arm/boot/dts/ti/omap/am437x-cm-t43.dts | 46 +++++++++++++++------
+ 1 file changed, 34 insertions(+), 12 deletions(-)
+
+diff --git a/arch/arm/boot/dts/ti/omap/am437x-cm-t43.dts b/arch/arm/boot/dts/ti/omap/am437x-cm-t43.dts
+index e06fc30091c8..e1f3ce0bdb49 100644
+--- a/arch/arm/boot/dts/ti/omap/am437x-cm-t43.dts
++++ b/arch/arm/boot/dts/ti/omap/am437x-cm-t43.dts
+@@ -44,6 +44,15 @@ AM4372_IOPAD(0xa78, MUX_MODE7)
+ 		>;
+ 	};
+ 
++	phy_pins: phy-pins {
++		pinctrl-single,pins = <
++			AM4372_IOPAD(0xa38, PIN_OUTPUT_PULLUP | MUX_MODE7) /* gpio5_8, PHY1 reset */
++			AM4372_IOPAD(0xa3c, PIN_INPUT_PULLUP | MUX_MODE7) /* gpio5_9, PHY1 IRQ */
++			AM4372_IOPAD(0xa40, PIN_OUTPUT_PULLUP | MUX_MODE7) /* gpio5_10, PHY0 rst */
++			AM4372_IOPAD(0xa44, PIN_INPUT_PULLUP | MUX_MODE7) /* gpio5_11, PHY0 IRQ */
++		>;
++	};
++
+ 	i2c0_pins: i2c0-pins {
+ 		pinctrl-single,pins = <
+ 			AM4372_IOPAD(0x988, PIN_INPUT_PULLUP | SLEWCTRL_FAST | MUX_MODE0)  /* i2c0_sda.i2c0_sda */
+@@ -110,7 +119,6 @@ AM4372_IOPAD(0x934, PIN_INPUT_PULLDOWN | MUX_MODE2)	/* mii1_rxd1.rgmii1_rxd3 */
+ 			AM4372_IOPAD(0x938, PIN_INPUT_PULLDOWN | MUX_MODE2)	/* mii1_rxd0.rgmii1_rxd2 */
+ 			AM4372_IOPAD(0x93c, PIN_INPUT_PULLDOWN | MUX_MODE2)	/* mii1_rxd1.rgmii1_rxd1 */
+ 			AM4372_IOPAD(0x940, PIN_INPUT_PULLDOWN | MUX_MODE2)	/* mii1_rxd0.rgmii1_rxd0 */
+-			AM4372_IOPAD(0xa74, MUX_MODE3)
+ 			/* Slave 2 */
+ 			AM4372_IOPAD(0x840, PIN_OUTPUT_PULLDOWN | MUX_MODE2)	/* gpmc_a0.txen */
+ 			AM4372_IOPAD(0x844, PIN_INPUT_PULLDOWN  | MUX_MODE2)	/* gpmc_a1.rxctl */
+@@ -124,15 +132,14 @@ AM4372_IOPAD(0x860, PIN_INPUT_PULLDOWN  | MUX_MODE2)	/* gpmc_a8.rxd3 */
+ 			AM4372_IOPAD(0x864, PIN_INPUT_PULLDOWN  | MUX_MODE2)	/* gpmc_a9.rxd2 */
+ 			AM4372_IOPAD(0x868, PIN_INPUT_PULLDOWN  | MUX_MODE2)	/* gpmc_a10.rxd1 */
+ 			AM4372_IOPAD(0x86c, PIN_INPUT_PULLDOWN  | MUX_MODE2)	/* gpmc_a11.rxd0 */
+-			AM4372_IOPAD(0xa38, MUX_MODE7)
+ 		>;
+ 	};
+ 
+ 	davinci_mdio_default: davinci-mdio-default-pins {
+ 		pinctrl-single,pins = <
+ 			/* MDIO */
+-			AM4372_IOPAD(0x948, PIN_INPUT_PULLUP | SLEWCTRL_FAST | MUX_MODE0)	/* mdio_data.mdio_data */
+-			AM4372_IOPAD(0x94c, PIN_OUTPUT_PULLUP | MUX_MODE0)			/* mdio_clk.mdio_clk */
++			AM4372_IOPAD(0x948, PIN_INPUT_PULLUP | SLEWCTRL_FAST | MUX_MODE0)
++			AM4372_IOPAD(0x94c, PIN_OUTPUT_PULLUP | MUX_MODE0) /* mdio_clk */
+ 		>;
+ 	};
+ };
+@@ -333,26 +340,41 @@ &mac_sw {
+ 
+ &davinci_mdio_sw {
+ 	pinctrl-names = "default";
+-	pinctrl-0 = <&davinci_mdio_default>;
+-
+-	ethphy0: ethernet-phy@0 {
+-		reg = <0>;
++	pinctrl-0 = <&davinci_mdio_default &phy_pins>;
++	compulab,cm-t43-phy-init;
++
++	ethphy0: ethernet-phy@4 {
++		compatible = "ethernet-phy-id001c.c915",
++			     "ethernet-phy-ieee802.3-c22";
++		reg = <4>;
++		reset-gpios = <&gpio5 10 GPIO_ACTIVE_LOW>;
++		reset-assert-us = <20000>;
++		reset-deassert-us = <100000>;
++		interrupt-parent = <&gpio5>;
++		interrupts = <11 IRQ_TYPE_LEVEL_LOW>;
+ 	};
+ 
+-	ethphy1: ethernet-phy@1 {
+-		reg = <1>;
++	ethphy1: ethernet-phy@5 {
++		compatible = "ethernet-phy-id001c.c915",
++			     "ethernet-phy-ieee802.3-c22";
++		reg = <5>;
++		reset-gpios = <&gpio5 8 GPIO_ACTIVE_LOW>;
++		reset-assert-us = <20000>;
++		reset-deassert-us = <100000>;
++		interrupt-parent = <&gpio5>;
++		interrupts = <9 IRQ_TYPE_LEVEL_LOW>;
+ 	};
+ };
+ 
+ &cpsw_port1 {
+ 	phy-handle = <&ethphy0>;
+-	phy-mode = "rgmii-txid";
++	phy-mode = "rgmii-id";
+ 	ti,dual-emac-pvid = <1>;
+ };
+ 
+ &cpsw_port2 {
+ 	phy-handle = <&ethphy1>;
+-	phy-mode = "rgmii-txid";
++	phy-mode = "rgmii-id";
+ 	ti,dual-emac-pvid = <2>;
+ };
+ 
+-- 
+2.43.0

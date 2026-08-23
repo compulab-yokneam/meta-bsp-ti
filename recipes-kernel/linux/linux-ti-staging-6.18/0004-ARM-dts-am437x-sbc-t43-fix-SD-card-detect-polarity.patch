@@ -1,0 +1,26 @@
+From 276a89b79b7db1cf9d04f0ce5fa0408d00d1244e Mon Sep 17 00:00:00 2001
+From: Valentin Raevsky <valentin@compulab.co.il>
+Date: Sun, 23 Aug 2026 12:53:32 +0000
+Subject: [PATCH 4/4] ARM: dts: am437x-sbc-t43: fix SD card-detect polarity
+
+Upstream-Status: Pending
+Signed-off-by: Valentin Raevsky <valentin@compulab.co.il>
+---
+ arch/arm/boot/dts/ti/omap/am437x-sbc-t43.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm/boot/dts/ti/omap/am437x-sbc-t43.dts b/arch/arm/boot/dts/ti/omap/am437x-sbc-t43.dts
+index 73badf80b4ff..a42941648fef 100644
+--- a/arch/arm/boot/dts/ti/omap/am437x-sbc-t43.dts
++++ b/arch/arm/boot/dts/ti/omap/am437x-sbc-t43.dts
+@@ -131,7 +131,7 @@ &mmc1 {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&mmc1_pins>;
+ 	vmmc-supply = <&vsb_3v3>;
+-	cd-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
++	cd-gpios = <&gpio0 6 GPIO_ACTIVE_LOW>;
+ 	wp-gpios = <&gpio0 7 GPIO_ACTIVE_HIGH>;
+ };
+ 
+-- 
+2.43.0
