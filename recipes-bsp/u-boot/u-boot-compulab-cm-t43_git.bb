@@ -16,8 +16,13 @@ SRC_URI = " \
 SRCREV = "${AUTOREV}"
 
 UBOOT_MACHINE = "cm_t43_defconfig"
+UBOOT_MAKE_TARGET = "all cm-t43-firmware"
 
 # The u-boot-initial-env make target was introduced after this U-Boot release.
 UBOOT_INITIAL_ENV = ""
+
+do_install:append() {
+    install -D -m 0644 ${B}/cm-t43-firmware ${D}/boot/cm-t43-firmware
+}
 
 COMPATIBLE_MACHINE = "^cm-t43$"
