@@ -12,7 +12,6 @@ PV = "2016.01-cm-t43-1.2"
 
 SRC_URI = " \
     git://github.com/compulab/u-boot.git;protocol=https;branch=cm-t43/dev \
-    file://0001-compiler-gcc-use-gcc5-definitions-for-newer-compilers.patch \
 "
 SRCREV = "${AUTOREV}"
 
