@@ -1,0 +1,30 @@
+#!/bin/bash
+
+CL_FUNCTIONS=/usr/share/cl-deploy/cl-functions.inc
+
+if [[ ! -f ${CL_FUNCTIONS} ]];then
+cat << eof
+The package library file ${CL_FUNCTIONS} is not found.
+Reinstall the cl-deploy package.
+eof
+exit 3
+fi
+
+source ${CL_FUNCTIONS}
+
+WORK=/usr/local/bin/cl-deploy.work
+declare -A term_opt=(['weston-terminal']='--shell' ['xterm']='-e')
+
+[[ -t 0 ]] && EXEC="source" || for T in weston-terminal matchbox-terminal xterm; do
+command -v ${T} &>/dev/null
+	if [ $? -eq 0 ];then
+		export EXEC="${T} ${term_opt[${T}]}"
+		break
+	fi
+done
+
+export BOOT=$(get_root_device)
+[[ -z ${SRC} && -z ${EMUL} ]] && export SRC=${BOOT}
+export SCAN_ALL=0
+
+${EXEC} ${WORK}

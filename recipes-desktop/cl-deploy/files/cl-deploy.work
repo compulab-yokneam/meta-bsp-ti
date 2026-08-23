@@ -1,0 +1,516 @@
+#!/bin/bash
+
+set -e
+
+SRC=${SRC:=''}
+DST=${DST:=''}
+SCAN_ALL=${SCAN_ALL:=1}
+dialog_app=dialog
+[[ -n ${QUIET} ]] && dialog_app='true || '${dialog_app}
+[[ -n ${DEBUG} ]] && set -x
+
+CL_DEPLOY_DIR=/usr/share/cl-deploy
+CL_DEPLOY_PRE=${CL_DEPLOY_DIR}/pre
+CL_DEPLOY_APP=${CL_DEPLOY_DIR}/app
+
+MKTEMP=/var/run
+RSYNC_COMMAND="rsync --info=progress2 -aHAXS --stats --exclude=/dev/* --exclude=/proc/* --exclude=/sys/* --exclude=/tmp/* --exclude=/run/* --exclude=/var/log/* --exclude=/mnt/* --exclude=/media/* --exclude=/lost+found/*"
+
+declare -a sw_array='dialog pv bunzip2 gunzip xz sfdisk partprobe bc'
+
+validate_sw() {
+for sw in $sw_array; do
+    command -v ${sw} &>/dev/null
+    if [ $? -ne 0 ]; then
+cat << eom
+    Make sure that all required tools: "${sw_array[@]}" are installed.
+    ${sw} is missing
+eom
+    exit 2
+    fi
+done
+}
+
+validate_sw
+
+part_dump() {
+    # This function ignores the passed parameters;
+    # uses the globals SRC and DST
+
+    # remove the last partition and the last-lba from the source dump;
+    # it allows dumping to a low-sized media;
+    # in this case it is up to the operator to handle: a not enough space failure.
+    sfdisk --dump ${SRC} | awk '!/last-lba|label-id/' | sed '$d' | sfdisk ${DST}
+    # append the source last partition to the dst with the open end block:
+    # to the end of the available disk's space.
+    sfdisk --list ${SRC} | awk 'END { print $2 }' | sfdisk ${DST} --append
+}
+
+zap_device() {
+    local dev=${1}
+
+    sgdisk --help | grep -q "zap-all" && {
+        sgdisk --zap-all ${dev} && return || true
+    } || true
+
+    sgdisk --help | grep -q "zap" && {
+        sgdisk --zap ${dev} && return || true
+    } || true
+
+    # Issue a legacy dd-method if:
+    # 1) zap commands are not available
+    # 2) zap commands failed
+    dev=$(basename ${dev})
+    local count=2048
+    local offset="0 "$(( $(cat  /sys/class/block/${dev}/size) - ${count} ))
+    for _offest in ${offset};do
+        dd if=/dev/zero of=/dev/${dev} count=${count} seek=${_offset}
+    done
+}
+
+ext4opt=" -O 64bit -O has_journal"
+
+source_block_device() {
+
+# Make sure that the source device does not have
+# an extended partition
+local extended=$(sfdisk -l ${SRC} | awk '($0~/Extended/)&&($0="yes")')
+if [[ -n ${extended} ]]; then
+cat << eom
+
+    !!! Unsupported configuration !!!
+    Source device ${SRC}
+    contains an extended partition.
+    Exiting ...
+
+eom
+exit 0
+fi
+
+cat << eom
+
+    Clonning Block Device
+    Started: ${SRC} ==> ${DST}
+
+eom
+
+# Clean up the destination 1-st
+zap_device ${DST}
+
+sys_src=$(basename ${SRC})
+sys_dst=$(basename ${DST})
+
+# Clone partition table
+part_dump ${SRC} ${DST}
+if [ $? -ne 0 ];then
+cat << eof
+Partition table dump error.
+Exit with an error.
+eof
+grep -ar . /sys/class/block/{${sys_src},${sys_dst}}/size
+exit 2
+fi
+
+# Make the kernel apply the new layout
+partprobe ${DST}
+
+# The Real job starts here
+
+# Copy each $scr.$part -> $dst.$part
+for _src in /sys/class/block/${sys_src}*/partition;do
+
+    part=$(cat ${_src})
+    _dst=/sys/class/block/${sys_dst}*${part}/partition
+
+    _src=/dev/$(basename $(dirname ${_src}))
+    _dst=/dev/$(basename $(dirname ${_dst}))
+
+    # Take the source partition iformation
+    eval $(blkid --output export ${_src})
+
+    [[ ${TYPE} = "ext"* ]] && OPT=" -F" || OPT=""
+    [[ ${TYPE} = "ext4"* ]] && OPT+=" ${ext4opt}" || true
+
+    # Format the destination that same as the source
+    mkfs.${TYPE} ${OPT} ${_dst}
+
+    # Take the destination partition iformation
+    # set the sync flags accordingly
+    eval $(blkid --output export ${_dst})
+    [[ ${TYPE} = "vfat" ]] && rsync_opt=" --no-owner --no-perms --no-g" || rsync_opt=" "
+
+    mount ${_dst} ${mdst}
+    TARGET=$(findmnt ${_src} --output TARGET --noheadings || true)
+    [[ -n ${TARGET} ]] && mount -B ${TARGET} ${msrc} || mount ${_src} ${msrc}
+
+    prompt="[ ${_src} => ${_dst} ]"
+    ${RSYNC_COMMAND} ${rsync_opt} ${msrc}/* ${mdst} || rsync_error ${msrc} ${mdst}
+
+    umount ${msrc}
+    umount ${mdst}
+
+done
+
+cat << eom
+
+    Done: ${SRC} ==> ${DST}
+
+eom
+
+}
+
+source_tar_ball() {
+cat << eom
+
+    Deploying tar-ball
+    Started: ${SRC} ==> ${DST}
+
+eom
+
+    create_cl_layout
+
+    tar_info=$(file ${SRC} | awk '(/bzip2|gzip|zx/)&&($0=$2)')
+    [[ ${tar_info} = bzip2 ]] && filter=j
+    [[ ${tar_info} = gzip ]] && filter=z
+    [[ ${tar_info} = xz ]] && filter=J
+
+    for _DST in ${DST}${DPART}*;do
+        _basename=$(basename ${_DST})
+        [[ $(cat /sys/class/block/${_basename}/partition) -eq 1 ]] && continue
+        mount ${_DST} ${mdst}
+        prompt="[ ${SRC} => ${_DST} ]"
+        pv ${SRC} | tar -C ${mdst} -x${filter}f - 2>/dev/null || rsync_error ${mdst}
+        umount ${_DST}
+    done
+
+    # Copy boot content to the boot-partition
+    mount ${DST}${DPART}2 ${msrc}
+    if [[ -d ${msrc}/boot ]];then
+        mount ${DST}${DPART}1 ${mdst}
+        cp -a ${msrc}/boot/* ${mdst}
+        umount ${mdst}
+    fi
+    umount ${msrc}
+
+cat << eom
+
+    Done: ${SRC} ==> ${DST}
+
+eom
+}
+
+last_part_x() {
+    LAST=$(sfdisk -l ${DST} | awk -v var=${DST}${DPART} ' END { gsub(var,"",$1); print $1 }')
+    echo ",+" | sfdisk -N ${LAST} ${DST}
+    partprobe ${DST}
+    resize2fs ${DST}${DPART}${LAST}
+}
+
+source_diskimage() {
+cat << eom
+
+    Deploying diskimage
+    Started: ${SRC} ==> ${DST}
+
+eom
+
+    prompt="[ ${SRC} => ${DST} ]"
+    ${DECOMPRESSOR} -dc ${SRC} | pv -N "${prompt}" | dd of=${DST} bs=1M
+    partprobe ${DST}
+
+    [[ -n ${LPLUS} ]] && last_part_x
+
+cat << eom
+
+    Done: ${SRC} ==> ${DST}
+
+eom
+}
+
+source_file() {
+eval $(file ${SRC} | awk '($0=tolower($0))&&($0="arc="$2)')
+case $arc in
+	bzip2|gzip|xz)
+	export DECOMPRESSOR=${arc}
+	type=$(${arc} -dc ${SRC} | file - | awk '(/archive/)&&($0="tar_ball")||($0="diskimage")')
+	source_${type}
+	;;
+	*)
+	echo "Invalid file type $arc ..."
+	;;
+esac
+}
+
+rsync_error() {
+    for _m in ${@};do
+        umount -l ${_m} || true
+    done
+    exit 22
+}
+
+source_directory() {
+cat << eom
+
+    Deploying directory
+    Started: ${SRC} ==> ${DST}
+
+eom
+
+    # Calculate the boot folder size allign +16M
+    _size=$(du -sm /boot | awk '$0=$1')
+    _size=$(( (( (( ${_size} + 32 )) / 16 )) * 16 ))
+
+    _size=${_size} create_cl_layout
+
+    mount -B -o ro ${SRC}${SPART}/ ${msrc}
+    for _DST in ${DST}${DPART}[2-9];do
+        _basename=$(basename ${_DST})
+        [[ -f /sys/class/block/${_basename}/partition ]] || continue
+        eval $(blkid --output export ${_DST})
+        [[ ${TYPE} = "vfat" ]] && rsync_opt=" --no-owner --no-perms --no-g" || rsync_opt=" "
+        mount ${_DST} ${mdst}
+        prompt="[ ${SRC}${SPART} => ${_DST} ]"
+        ${RSYNC_COMMAND} ${rsync_opt} ${msrc}/* ${mdst} || rsync_error ${msrc} ${mdst}
+        umount ${_DST}
+    done
+    umount ${msrc}
+
+    # Copy boot content to the boot-partition
+    mount ${DST}${DPART}2 ${msrc}
+    if [[ -d ${msrc}/boot ]];then
+        eval $(blkid --output export ${DST}${DPART}2)
+        [[ ${TYPE} = "vfat" ]] && rsync_opt=" --no-owner --no-perms --no-g" || rsync_opt=" "
+        mount ${DST}${DPART}1 ${mdst}
+        ${RSYNC_COMMAND} ${rsync_opt} ${msrc}/boot/* ${mdst} || rsync_error ${msrc} ${mdst}
+        umount ${mdst}
+    fi
+    umount ${msrc}
+
+cat << eom
+
+    Done: ${SRC} ==> ${DST}
+
+eom
+}
+
+create_cl_layout() {
+
+    # Boot partition size/start im MB
+    _size=${_size:-32}
+    _start=${_start:-4}
+
+    local _start1=0
+
+    # Mega -> Block
+    _size=$(($_size << 11))
+    _start=$(($_start << 11))
+    _start1=$(($_start + $_size))
+
+unit_opt=$(sfdisk --help | awk '(/unit/&&!/deprecated/)&&($0=" -uS")')
+
+sfdisk --force ${unit_opt} ${DST} << eosfdisk
+${_start},${_size},0x83
+${_start1},,0x83
+eosfdisk
+partprobe ${DST}
+
+    mkfs.ext2 -F -L boot ${DST}${DPART}1
+    mkfs.ext4 -F ${ext4opt} -L rootfs ${DST}${DPART}2
+}
+
+unmount_destination() {
+    # There is nothing to think about;
+    # Issue a force unmount
+    umount -l ${DST}${DPART}* &>/dev/null || true
+}
+
+target_block_device() {
+    unmount_destination
+    [[ -b ${SRC} ]] && source_block_device || true
+    [[ -d ${SRC} ]] && source_directory || true
+    [[ -f ${SRC} ]] && source_file || true
+}
+
+success_reboot() {
+[[ -z ${QUIET} ]] && reboot
+cat << eom
+	 #####  #     #  #####   #####  #######  #####   #####
+	#     # #     # #     # #     # #       #     # #     #
+	#       #     # #       #       #       #       #
+	 #####  #     # #       #       #####    #####   #####
+	      # #     # #       #       #             #       #
+	#     # #     # #     # #     # #       #     # #     #
+	 #####   #####   #####   #####  #######  #####   #####
+eom
+}
+
+success_exit() {
+    local DIALOG="Finished with success"
+    local MESSAGE="Boot media has been deployed on ${DST}\n\nWould you like to reboot the device now?"
+    ${dialog_app} --backtitle "${DIALOG}" --yesno "${MESSAGE}" 10 80 && success_reboot
+}
+
+msg_exit() {
+# 1-message, 2-exit code
+cat << eom
+$1
+eom
+exit $2
+}
+
+validate_devices() {
+[[ -b ${SRC} || -d ${SRC} || -f ${SRC} ]] || msg_exit "Invalid SRC=${SRC}, exiting with errno=1" 1
+[[ -b ${DST} ]] || msg_exit "Invalid DST=${DST}, exiting with errno=2" 2
+[[ ${DST} != ${BOOT} ]] || msg_exit "Invalid DST=${DST} is equal to BOOT=${BOOT}, exiting with errno=3" 3
+}
+
+select_directory() {
+	local DIALOG="Select a directory:"
+	_SELECT=$(${dialog_app} --backtitle "${DIALOG}" --dselect / 15 80 --stdout)
+}
+
+select_file() {
+	local DIALOG="Select a ${1}:"
+	while [ 1 ];do
+	_SELECT=$(${dialog_app} --backtitle "${DIALOG}" --fselect / 15 80  --stdout)
+	# Empty=Cancel, then exit
+	[[ -z ${_SELECT} ]] && break;
+
+	if [[ ! -f ${_SELECT} ]];then
+		DIALOG="Invalid selection ${_SELECT} : try again ..."
+	else
+		eval $(file ${_SELECT} | awk '($0=tolower($0))&&(/bzip2|gzip|xz/)&&($0="arc="$2)')
+		[[ -n ${arc} ]] && break;
+		DIALOG="Invalid file format ${_SELECT}: try again ..."
+	fi
+	done
+}
+
+select_tarball() {
+	select_file "tarball"
+}
+
+select_diskimage() {
+	select_file "diskimage"
+}
+
+get_all_device() {
+    local ignored=${1:--na-}
+    local min_size_inb=${2:-2048}
+    local all_devs=$(ls /sys/class/block/*/size | awk -F"/" '((/mmc|sd|nvme/)&&($0=$5))')
+    unset avail_devs; declare -a avail_devs
+    local i=0
+    for dev in ${all_devs};do
+	[[ -e /sys/class/block/${dev}/partition ]] && continue || true
+	[[ ${dev} =~ "boot" ]] && continue || true
+	block_dev=$(udevadm info -n "/dev/"${dev} | awk -F"/" '(/DEVNAME/)&&($0=$NF)')
+	[[ ${ignore} =~ ${block_dev} ]] && continue || true
+	[[ ${avail_devs[@]} =~ ${block_dev} ]] && continue || true
+	avail_devs[$((i++))]="/dev/${block_dev} "
+    done
+    if [[ ${#avail_devs[@]} -ne 0 ]];then
+        local rlist=''
+        for adev in ${avail_devs[@]};do
+            rlist+=${adev}" OFF "
+        done
+        for i in $(seq 3 $#);do
+            eval j=\$${i}
+            rlist+=${j}" OFF "
+        done
+        _SELECT=$(${dialog_app} --backtitle "Select a ${type} device" --no-items --radiolist "Available Devices:" 12 80 12 ${rlist} --stdout)
+    fi
+}
+
+cl_deploy_wrap() {
+if [ -d ${CL_DEPLOY_FOLDER} ]; then
+    for f in ${CL_DEPLOY_FOLDER}/* ; do
+        [[ ${f} ]] && source ${f} || true
+    done
+fi
+}
+
+# If source is provided by the caller,
+# then use it. Skip this select ${dialog_app}.
+if [[ -z ${SRC} ]];then
+    _SELECT=''
+    ignore=$([[ -n ${DST} ]] && basename ${DST} || echo -n "-")
+    type="source"; get_all_device ${ignore} 0 directory tarball diskimage
+    SRC=${_SELECT}
+    [[ ${SRC} = 'directory' || ${SRC} = 'tarball' || ${SRC} = 'diskimage' ]] && select_${SRC}
+    SRC=${_SELECT}
+fi
+
+# For some reason a source still not selected
+# Warning & Exit
+if [[ -z ${SRC} ]];then
+    DIALOG='No source device'
+    ${dialog_app} --backtitle "${DIALOG}" --title " WARNING " --msgbox "${DIALOG}\nPess any key for exit." 10 80
+    exit 2
+fi
+
+# If destination is provided by the caller,
+# then use it. Skip this select ${dialog_app}.
+if [[ -z ${DST} ]];then
+    _SELECT=''
+
+    for ign in ${SRC} ${BOOT}; do
+    ignore+=$([[ -b ${ign} ]] && basename ${ign})":"
+    done
+
+    type="destination"; get_all_device ${ignore}
+    DST=${_SELECT}
+fi
+
+# For some reason a destination still not selected
+# Warning & Exit
+if [[ -z ${DST} ]];then
+    DIALOG='No destination device'
+    ${dialog_app} --backtitle "${DIALOG}" --title " WARNING " --msgbox "${DIALOG}\nPess any key for exit." 10 80
+    exit 2
+fi
+
+# this is a special case when the destination provided only
+if [[ ${SRC} = "-" && ${LPLUS} = "+" && -n ${DST} ]]; then
+	last_part_x
+	exit 0
+fi
+
+validate_devices
+
+if [[ -n ${EMUL} ]];then
+# Does nothing, just returns the SRC and DST to the caller.
+[ $(basename -- $BASH_SOURCE) == $(basename -- $0) ] && exit || return
+fi
+
+# if we got here then all paramteres are valid
+# last preparation before the start
+src=$(basename ${SRC})
+dst=$(basename ${DST})
+
+declare -A partdl=( [mmc]="p" [loo]="p" [nvm]="p" )
+SPART=${partdl[${src:0:3}]}
+DPART=${partdl[${dst:0:3}]}
+
+msrc=$(mktemp -p ${MKTEMP} -d)
+mdst=$(mktemp -p ${MKTEMP} -d)
+
+SUCCESS_EXIT=success_exit
+
+if [ -z ${UDEV}  ];then
+[ -f /etc/init.d/udev ] && /etc/init.d/udev stop
+pidof systemd >/dev/null && systemctl stop systemd-udevd*
+fi
+
+DIALOG="Start Deployment"
+MESSAGE="Src: ${SRC} -> Dst: ${DST}\n\nAll data on ${DST} will be destroyed"
+${dialog_app} --backtitle "${DIALOG}" --title " WARNING  " --yesno "${MESSAGE}" 10 80 || exit
+
+CL_DEPLOY_FOLDER=${CL_DEPLOY_PRE} cl_deploy_wrap
+
+target_block_device
+
+CL_DEPLOY_FOLDER=${CL_DEPLOY_APP} cl_deploy_wrap
+
+${SUCCESS_EXIT}
+
+exit

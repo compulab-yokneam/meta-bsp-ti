@@ -1,0 +1,13 @@
+#!/bin/bash
+
+function_nvme0n1 () {
+    device=$(basename $(findmnt / --output SOURCE --noheadings))
+    device=$(basename $(dirname /sys/block/*/${device}))
+
+    command -v function_${device} && function_${device}
+}
+
+DST=${DST:-empty}
+device=$(basename ${DST})
+
+command -v function_${device} && function_${device}
