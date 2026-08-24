@@ -221,7 +221,62 @@ The WIC image places `MLO`, `u-boot.img`, `bootscr.img`, `zImage-cm-t43`,
 default CM-T43 U-Boot environment loads and executes `bootscr.img`; the script
 boots the root filesystem from the second SD-card partition.
 
-## 7. Re-enter an existing build
+## 7. Download and deploy a ready-to-run image
+
+A prebuilt CM-T43 image is available from the
+[CM-T43 image folder](https://drive.google.com/drive/folders/16fkJonArmD3tlDMUipygQmDkWi7fupV_).
+Download these files with a web browser:
+
+```text
+tisdk-base-image-cm-t43.rootfs-<time-stamp>.wic.xz
+tisdk-base-image-cm-t43.rootfs-<time-stamp>.manifest
+```
+
+The `.wic.xz` file is the compressed, ready-to-write SD-card image. The
+`.manifest` file lists the packages installed in that image and is not required
+for writing or booting the SD card.
+
+On a Linux host, enter the directory containing the downloaded files and check
+the compressed image before writing it:
+
+```bash
+cd /path/to/download-directory
+IMAGE='tisdk-base-image-cm-t43.rootfs-<time-stamp>.wic.xz'
+xz -t "${IMAGE}"
+```
+
+Insert the SD card and identify its whole-device path. Compare the output before
+and after inserting the card if the target is not immediately clear:
+
+```bash
+lsblk -p -o NAME,SIZE,MODEL,TRAN,MOUNTPOINTS
+```
+
+Set `SD_DEVICE` to the whole SD-card device, such as `/dev/sdX` or
+`/dev/mmcblkN`, not to a partition such as `/dev/sdX1` or `/dev/mmcblkNp1`:
+
+```bash
+SD_DEVICE=/dev/sdX
+lsblk -p -o NAME,SIZE,MODEL,TRAN,MOUNTPOINTS "${SD_DEVICE}"
+```
+
+This operation overwrites the selected device completely. Verify `SD_DEVICE`
+carefully and unmount every mounted partition shown beneath it before
+continuing. Then write the compressed image directly to the card:
+
+```bash
+set -o pipefail
+xz -dc -- "${IMAGE}" | sudo dd of="${SD_DEVICE}" \
+    bs=4M iflag=fullblock conv=fsync status=progress
+sync
+```
+
+After the command succeeds, safely remove the SD card, insert it into the
+SB-SOM-T43 base board, select SD-card boot, and power on the board. The image's
+first partition contains the boot files and its second partition contains the
+root filesystem.
+
+## 8. Re-enter an existing build
 
 For subsequent build sessions, only the environment initialization and build
 command are required:
