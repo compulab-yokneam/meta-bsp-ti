@@ -1,0 +1,158 @@
+#!/bin/bash
+
+file=/boot/cm-t43-firmware
+device=mtd0
+device_file=/dev/${device}
+offset=0x0
+expected_label=uboot
+expected_size=0xc0000
+line=$(seq 1 72 | awk '$0="-"' ORS="")
+
+mtd_unlock() {
+flash_unlock ${device_file} 0
+}
+
+if [ "${EUID}" -ne 0 ]; then
+TITLE="WARNING"
+DIALOG="This tool must run as root.\n"
+DIALOG+="\n${line}\n"
+DIALOG+="No data was written to SPI flash.\n"
+dialog --backtitle "${TITLE}" --title "${TITLE}" --msgbox "${DIALOG}" 15 80
+exit 2
+fi
+
+if [ ! -e "${file}" ]; then
+TITLE="WARNING"
+DIALOG="Source File:\n"
+DIALOG+="	${file}\n"
+DIALOG+="\n${line}\n"
+DIALOG+="	!Not Found!\n"
+DIALOG+="	Exiting ...\n"
+dialog --backtitle "${TITLE}" --title "${TITLE}" --msgbox "${DIALOG}" 15 80
+exit 2
+fi
+
+if [ ! -c ${device_file} ];then
+TITLE="WARNING"
+DIALOG="Destination SPI Flash:\n"
+DIALOG+="	${device_file}\n"
+DIALOG+="\n${line}\n"
+DIALOG+="	!Not Found!\n"
+DIALOG+="	Exiting ...\n"
+dialog --backtitle "${TITLE}" --title "${TITLE}" --msgbox "${DIALOG}" 15 80
+exit 2
+fi
+
+# This creates File/Size variables
+eval $(stat -c Size=%s";"File=%n 2>/dev/null $(readlink -f ${file}))
+
+mtd_dev_size=$(awk -v dev=${device} '($1==dev ":")&&($0="0x"$2)' /proc/mtd)
+mtd_dev_label=$(awk -v dev=${device} '($1==dev ":"){gsub(/"/, "", $4); print $4}' /proc/mtd)
+
+if [[ ${mtd_dev_label} != ${expected_label} ]] || \
+	(( mtd_dev_size != expected_size || Size != expected_size )); then
+TITLE="WARNING"
+DIALOG="Refusing to update unexpected SPI flash contents:\n"
+DIALOG+="\tSource: ${File} (${Size} bytes)\n"
+DIALOG+="\tDestination: ${device_file} (${mtd_dev_label}, ${mtd_dev_size})\n"
+DIALOG+="\tExpected: ${expected_label}, ${expected_size}\n"
+DIALOG+="\n${line}\n"
+DIALOG+="Exiting without writing SPI flash.\n"
+dialog --backtitle "${TITLE}" --title "${TITLE}" --msgbox "${DIALOG}" 17 80
+exit 3
+fi
+
+# validate
+mtd_read_file=/tmp/mtd-read-${offset}-${Size}
+trap 'rm -f ${mtd_read_file}' EXIT
+rm -f ${mtd_read_file}
+mtd_debug read ${device_file} ${offset} ${Size} ${mtd_read_file} &>/dev/null
+
+version1=$(strings ${File} | awk '(/^U-Boot.*\(/)')
+if [ -z "${version1}" ];then
+TITLE="WARNING"
+DIALOG="Source File:\n"
+DIALOG+="	${File}\n"
+DIALOG+="\n${line}\n"
+DIALOG+="	!CORRUPTED!\n"
+DIALOG+="	Exiting ...\n"
+dialog --backtitle "${TITLE}" --title "${TITLE}" --msgbox "${DIALOG}" 15 80
+exit 3
+fi
+
+if [[ -z ${FORCE} ]];then
+diff ${File} ${mtd_read_file} &>/dev/null
+if [ $? -eq 0 ]; then
+
+TITLE="NOTICE"
+DIALOG="Source File:\n"
+DIALOG+="	${File}\n"
+DIALOG+="Destination SPI Flash:\n"
+DIALOG+="	${device_file}\n"
+DIALOG+="Version:\n"
+DIALOG+="	${version1}\n"
+DIALOG+="\n${line}\n"
+DIALOG+="U-Boot versions match, nothing to do. Exiting ...\n"
+dialog --backtitle "${TITLE}" --title "${TITLE}" --msgbox "${DIALOG}" 15 80
+exit 0
+fi
+fi
+
+version2=$(strings ${mtd_read_file} | awk '(/^U-Boot.*\(/)')
+[ -z "${version2}" ] && version2="--N/A--"
+
+TITLE="Start U-Boot Update"
+[[ -n ${FORCE} ]] && TITLE+=" : Forced"
+DIALOG="Source File:\n"
+DIALOG+="	${File}\n"
+DIALOG+="	${version1}\n"
+DIALOG+="\n${line}\n"
+DIALOG+="Detination SPI Flash:\n"
+DIALOG+="	${device_file}\n"
+DIALOG+="	${version2}\n"
+DIALOG+="\n${line}\n"
+DIALOG+="Warning: The complete U-Boot SPI partition will be erased"
+
+dialog --backtitle "${TITLE}" --title "${TITLE}" --yesno "${DIALOG}" 16 80 || exit
+
+set -xv
+# Unlock the flash first.
+mtd_unlock
+
+# erase
+mtd_debug erase ${device_file} 0x0 ${mtd_dev_size}
+
+# write
+mtd_debug write ${device_file} ${offset} ${Size} ${File}
+
+# read
+mtd_debug read ${device_file} ${offset} ${Size} ${mtd_read_file} &>/dev/null
+
+# validate
+diff ${File} ${mtd_read_file} &>/dev/null
+
+if [ $? -eq 0 ]; then
+# Good Case
+TITLE="Finished with success"
+DIALOG="Updated SPI Flash:\n"
+DIALOG+="	${device_file}\n"
+DIALOG+="	${version1}\n"
+DIALOG+="\n${line}\n"
+DIALOG+="Reboot the device, stop in U-Boot:\n"
+DIALOG+="	Issue: version\n"
+DIALOG+="\n${line}\n"
+dialog --title "${TITLE}" --title "${TITLE}" --msgbox "${DIALOG}" 15 80
+exit 0
+fi
+
+# Bad Case: Something went wrong if we got here
+cat << eom | dialog --title "Recovery" --programbox 20 80
+Update SPI Flash: failed!
+${line}
+Do not power the device off.
+Retry the update from Linux:
+# mtd_debug erase ${device_file} 0x0 ${mtd_dev_size}
+# mtd_debug write ${device_file} ${offset} ${Size} ${File}
+eom
+
+set +xv
