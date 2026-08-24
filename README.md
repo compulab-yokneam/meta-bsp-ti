@@ -271,10 +271,24 @@ xz -dc -- "${IMAGE}" | sudo dd of="${SD_DEVICE}" \
 sync
 ```
 
-After the command succeeds, safely remove the SD card, insert it into the
-SB-SOM-T43 base board, select SD-card boot, and power on the board. The image's
-first partition contains the boot files and its second partition contains the
-root filesystem.
+### Boot the CM-T43 from the SD card
+
+The CM-T43 normally uses its on-board SPI flash as the primary boot storage.
+The `ALT.BOOT` button changes the boot-mode selection sampled by the AM437x
+BootROM during reset, selecting the SD card as the source for the complete
+U-Boot bootloader chain instead of the SPI flash.
+
+To perform an SD-card boot:
+
+1. Power off the CM-T43 system and insert the prepared SD card into the P9
+   socket on the SB-SOM-T43 base board.
+2. Press and hold the `ALT.BOOT` (`SW3`) button.
+3. While holding `ALT.BOOT`, power on or reset the system.
+4. Release the button after the board starts booting from the SD card.
+
+The BootROM loads `MLO` from the first FAT partition, and `MLO` starts
+`u-boot.img`. U-Boot then executes `bootscr.img`, which loads the CM-T43 kernel
+and boots the root filesystem from the image's second partition.
 
 ## 8. Re-enter an existing build
 
