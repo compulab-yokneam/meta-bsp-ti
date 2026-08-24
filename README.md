@@ -290,6 +290,36 @@ The BootROM loads `MLO` from the first FAT partition, and `MLO` starts
 `u-boot.img`. U-Boot then executes `bootscr.img`, which loads the CM-T43 kernel
 and boots the root filesystem from the image's second partition.
 
+### Deploy the running SD-card image to the internal eMMC
+
+After the CM-T43 has booted successfully from the prepared SD card,
+`cl-deploy` can copy that installation to the module's internal eMMC device.
+The CM-T43 image includes this tool by default.
+
+Log in as `root` and verify that the system is running from the SD card and that
+the internal eMMC is `/dev/mmcblk1`:
+
+```bash
+findmnt -no SOURCE /
+lsblk -p -o NAME,SIZE,MODEL,TYPE,MOUNTPOINTS
+```
+
+The following command destroys all existing partitions and data on
+`/dev/mmcblk1`. Run it only after confirming that `/dev/mmcblk1` is the internal
+eMMC and is not the device that provides the currently running root filesystem:
+
+```bash
+DST=/dev/mmcblk1 cl-deploy
+```
+
+Review the source and destination displayed by `cl-deploy`, then confirm the
+operation when prompted. The tool recreates the SD-card partition layout and
+copies the boot and root filesystems to the eMMC.
+
+After deployment completes successfully, power off the board, remove the SD
+card, and power on the board without holding `ALT.BOOT` to verify that the system
+boots from the internal eMMC.
+
 ## 8. Re-enter an existing build
 
 For subsequent build sessions, only the environment initialization and build
