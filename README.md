@@ -320,6 +320,46 @@ After deployment completes successfully, power off the board, remove the SD
 card, and power on the board without holding `ALT.BOOT` to verify that the system
 boots from the internal eMMC.
 
+### Update the SPI bootloader from Linux
+
+The CM-T43 image includes the CompuLab `cl-uboot` utility and the combined
+bootloader image `/boot/cm-t43-firmware`. The utility programs that image into
+the SPI flash U-Boot partition exposed by Linux as `/dev/mtd0`.
+
+Use a stable power supply and do not reset or power off the board during the
+update. Log in as `root`, then verify that the firmware file and expected MTD
+device are present:
+
+```bash
+ls -lh /boot/cm-t43-firmware
+cat /proc/mtd
+test -c /dev/mtd0
+```
+
+Run the update utility:
+
+```bash
+cl-uboot
+```
+
+Before writing, `cl-uboot` verifies that `/dev/mtd0` is the `uboot` partition,
+that both the partition and `/boot/cm-t43-firmware` are 768 KiB, and that the
+firmware contains a U-Boot version string. If the flash already contains the
+same image, the utility exits without erasing it.
+
+Review the current and new versions displayed by the utility and confirm the
+operation when prompted. It unlocks and erases the U-Boot partition, writes the
+new image, reads it back, and verifies the result. Do not power off the board if
+the update or verification fails; retry `cl-uboot` from the running Linux
+system.
+
+After a successful update, reboot the board, stop at the U-Boot prompt, and
+verify the installed bootloader:
+
+```text
+version
+```
+
 ## 8. Re-enter an existing build
 
 For subsequent build sessions, only the environment initialization and build
