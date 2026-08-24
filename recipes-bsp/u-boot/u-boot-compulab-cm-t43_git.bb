@@ -25,4 +25,8 @@ do_install:append() {
     install -D -m 0644 ${B}/cm-t43-firmware ${D}/boot/cm-t43-firmware
 }
 
+do_deploy:append() {
+    install -D -m 0644 ${B}/cm-t43-firmware ${DEPLOYDIR}/cm-t43-firmware
+}
+
 COMPATIBLE_MACHINE = "^cm-t43$"

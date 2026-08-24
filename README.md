@@ -200,6 +200,7 @@ ls -lh "${TISDK_ROOT}/build/deploy-ti/images/cm-t43/"*wic.xz
 ls -lh "${TISDK_ROOT}/build/deploy-ti/images/cm-t43/"*tar.bz2
 ls -lh "${TISDK_ROOT}/build/deploy-ti/images/cm-t43/bootscr.img"
 ls -lh "${TISDK_ROOT}/build/deploy-ti/images/cm-t43/zImage-cm-t43"
+ls -lh "${TISDK_ROOT}/build/deploy-ti/images/cm-t43/cm-t43-firmware"
 ls -lh "${TISDK_ROOT}/build/deploy-ti/images/cm-t43/MLO"
 ls -lh "${TISDK_ROOT}/build/deploy-ti/images/cm-t43/u-boot.img"
 ```
@@ -215,10 +216,10 @@ The `.wic.xz` file is the compressed, partitioned SD-card image. The
 `.tar.bz2` file contains the root filesystem for extraction or installation by
 another deployment process.
 
-The WIC image places `MLO`, `u-boot.img`, `bootscr.img`, `zImage-cm-t43`, and
-`am437x-sbc-t43.dtb` in its first FAT partition. The default CM-T43 U-Boot
-environment loads and executes `bootscr.img`; the script boots the root
-filesystem from the second SD-card partition.
+The WIC image places `MLO`, `u-boot.img`, `bootscr.img`, `zImage-cm-t43`,
+`cm-t43-firmware`, and `am437x-sbc-t43.dtb` in its first FAT partition. The
+default CM-T43 U-Boot environment loads and executes `bootscr.img`; the script
+boots the root filesystem from the second SD-card partition.
 
 ## 7. Re-enter an existing build
 
