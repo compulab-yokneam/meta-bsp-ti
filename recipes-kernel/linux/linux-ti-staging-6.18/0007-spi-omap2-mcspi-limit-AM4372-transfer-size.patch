@@ -1,0 +1,42 @@
+From fbe609d7857e8bd2ce0709077f80b29795764364 Mon Sep 17 00:00:00 2001
+From: Valentin Raevsky <valentin@compulab.co.il>
+Date: Mon, 24 Aug 2026 06:23:49 +0000
+Subject: [PATCH 7/8] spi: omap2-mcspi: limit AM4372 transfer size
+
+Limit AM4372 transfers to the 65535-word FIFO count. This lets SPI memory operations split larger requests instead of entering a non-FIFO DMA transfer that never completes.
+
+Upstream-Status: Pending
+Signed-off-by: Valentin Raevsky <valentin@compulab.co.il>
+---
+ drivers/spi/spi-omap2-mcspi.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/drivers/spi/spi-omap2-mcspi.c b/drivers/spi/spi-omap2-mcspi.c
+index adba872e908d..e721e85bf3d2 100644
+--- a/drivers/spi/spi-omap2-mcspi.c
++++ b/drivers/spi/spi-omap2-mcspi.c
+@@ -1462,6 +1462,11 @@ static struct omap2_mcspi_platform_config omap4_pdata = {
+ 	.regs_offset = OMAP4_MCSPI_REG_OFFSET,
+ };
+ 
++static struct omap2_mcspi_platform_config am4372_pdata = {
++	.regs_offset = OMAP4_MCSPI_REG_OFFSET,
++	.max_xfer_len = OMAP2_MCSPI_MAX_FIFOWCNT,
++};
++
+ static struct omap2_mcspi_platform_config am654_pdata = {
+ 	.regs_offset = OMAP4_MCSPI_REG_OFFSET,
+ 	.max_xfer_len = SZ_4K - 1,
+@@ -1472,6 +1477,10 @@ static const struct of_device_id omap_mcspi_of_match[] = {
+ 		.compatible = "ti,omap2-mcspi",
+ 		.data = &omap2_pdata,
+ 	},
++	{
++		.compatible = "ti,am4372-mcspi",
++		.data = &am4372_pdata,
++	},
+ 	{
+ 		.compatible = "ti,omap4-mcspi",
+ 		.data = &omap4_pdata,
+-- 
+2.43.0

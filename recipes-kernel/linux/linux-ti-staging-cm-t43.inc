@@ -18,4 +18,7 @@ SRC_URI:append:cm-t43:bsp-ti-6_18 = " \
     file://0003-ARM-configs-enable-CM-T43-RTL8211E-support.patch \
     file://0004-ARM-dts-am437x-sbc-t43-fix-SD-card-detect-polarity.patch \
     file://0005-ARM-dts-am437x-cm-t43-add-legacy-Atheros-PHY-variant.patch \
+    file://0006-ARM-dts-am437x-cm-t43-describe-SPI-NOR-partitions.patch \
+    file://0007-spi-omap2-mcspi-limit-AM4372-transfer-size.patch \
+    file://0008-ARM-configs-build-SPI-NOR-into-OMAP2-kernel.patch \
 "

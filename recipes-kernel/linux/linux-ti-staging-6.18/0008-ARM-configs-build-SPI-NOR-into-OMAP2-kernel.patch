@@ -1,0 +1,28 @@
+From 11b1ae8a39f54d7906a53acc08d60b59f2b36dc9 Mon Sep 17 00:00:00 2001
+From: Valentin Raevsky <valentin@compulab.co.il>
+Date: Mon, 24 Aug 2026 06:23:54 +0000
+Subject: [PATCH 8/8] ARM: configs: build SPI NOR into OMAP2+ kernel
+
+Build SPI NOR support into the OMAP2+ kernel so the CM-T43 boot flash and its fixed partitions are available without loading a module. multi_v7_defconfig already enables this option built-in.
+
+Upstream-Status: Pending
+Signed-off-by: Valentin Raevsky <valentin@compulab.co.il>
+---
+ arch/arm/configs/omap2plus_defconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm/configs/omap2plus_defconfig b/arch/arm/configs/omap2plus_defconfig
+index 1b9e4e932285..6d7e2cded5c2 100644
+--- a/arch/arm/configs/omap2plus_defconfig
++++ b/arch/arm/configs/omap2plus_defconfig
+@@ -282,7 +282,7 @@ CONFIG_MTD_RAW_NAND=y
+ CONFIG_MTD_NAND_OMAP2=y
+ CONFIG_MTD_NAND_OMAP_BCH=y
+ CONFIG_MTD_NAND_ECC_SW_BCH=y
+-CONFIG_MTD_SPI_NOR=m
++CONFIG_MTD_SPI_NOR=y
+ CONFIG_MTD_UBI=y
+ CONFIG_ZRAM=m
+ CONFIG_ZRAM_WRITEBACK=y
+-- 
+2.43.0
