@@ -21,4 +21,6 @@ SRC_URI:append:cm-t43:bsp-ti-6_18 = " \
     file://0006-ARM-dts-am437x-cm-t43-describe-SPI-NOR-partitions.patch \
     file://0007-spi-omap2-mcspi-limit-AM4372-transfer-size.patch \
     file://0008-ARM-configs-build-SPI-NOR-into-OMAP2-kernel.patch \
+    file://0009-ARM-dts-am437x-cm-t43-fix-legacy-PHY-interface-mode.patch \
+    file://0010-net-mdio-add-CM-T43-pre-discovery-PHY-initialization.patch \
 "

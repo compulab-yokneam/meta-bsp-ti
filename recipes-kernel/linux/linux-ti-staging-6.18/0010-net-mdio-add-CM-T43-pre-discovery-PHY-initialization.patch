@@ -1,0 +1,592 @@
+From 364d3edcb497c323c48af252e6761428fc43bad9 Mon Sep 17 00:00:00 2001
+From: Valentin Raevsky <valentin@compulab.co.il>
+Date: Sat, 5 Sep 2026 10:04:06 +0000
+Subject: [PATCH] net: mdio: add CM-T43 pre-discovery PHY initialization
+
+A PHY described only by a generic Clause 22 compatible must have its
+identifier read over MDIO. fwnode_mdiobus_register_phy() performs that
+read before phy_device_register(), while the existing reset GPIO handling
+happens later from mdiobus_register_device(). Consequently a PHY which
+requires its reset line to be driven cannot acknowledge the discovery
+transaction. A model-specific ethernet-phy-id compatible hides the problem
+because it lets phylib create the device without accessing the hardware.
+
+Add fwnode_mdio_cmt_43.c for the CM-T43 pre-discovery reset sequence. Build
+it with CONFIG_TI_DAVINCI_MDIO_CM_T43 and additionally gate it at runtime
+with the compulab,cm-t43-phy-init property on the MDIO bus. This keeps the
+board-specific behavior out of the generic fwnode implementation and leaves
+other MDIO buses unchanged.
+
+For CM-T43 PHY nodes whose ID must be discovered, acquire the optional reset
+GPIO before get_phy_device(). Assert and deassert it using reset-assert-us
+and reset-deassert-us, then retain the descriptor and transfer it to the
+newly created mdio_device. Teach MDIO registration to reuse a pre-acquired
+reset descriptor and clear GPIO/reset-controller pointers when the device is
+unregistered so normal cleanup and error paths retain single ownership.
+
+Move the remaining CM-T43 PHY reference-clock setup from direct
+CONTROL_MODULE and PRCM register accesses to the common clock framework.
+Describe the complete AM437x CLKOUT2 mux, divider and gate chain, and model
+the EXTDEV DPLL M2 output gate separately from its divider. The separate
+gate is required because DPLL_CLKOUT_GATE_CTRL bit 8 must remain asserted
+for CLKOUT2; the former auto-idle description allowed that bit to be
+cleared.
+
+Extend the TI DPLL provider and its binding with opt-in ti,mn-bypass
+support. CM-T43 advertises both MN-bypass and locked modes for DPLL_EXTDEV,
+sets its M2 output to 2.5 MHz, and selects that output as the CLKOUT2 parent.
+MN bypass is board-specific because low-power bypass does not provide the
+PHY reference clock required by this hardware. Configure the
+xdma_event_intr1 pad for CLKOUT2 and expose the resulting clock to the
+DaVinci MDIO device as phy-ref.
+
+Have the CM-T43 MDIO helper acquire and enable phy-ref through managed clock
+framework APIs before PHY reset and discovery. Keep the clock enabled for
+the MDIO device lifetime and retain the required 10 ms settling delay.
+
+Describe both CM-T43 RTL8211E devices with the generic
+ethernet-phy-ieee802.3-c22 compatible. Their IDs are obtained from addresses
+4 and 5 through the normal fwnode discovery path instead of being supplied
+by the device tree.
+
+Tested on a CM-T43 with two RTL8211E PHYs. The driver enabled phy-ref at
+2.5 MHz, detected both PHYs at addresses 4 and 5, attached the RTL8211E
+driver, negotiated 1 Gbit/s full-duplex links, and obtained DHCP leases on
+eth0 and eth1. The device-tree-supplied ethernet-phy-id001c.c915 compatible
+works as well.
+
+Upstream-Status: Pending
+Signed-off-by: Valentin Raevsky <valentin@compulab.co.il>
+---
+ .../devicetree/bindings/clock/ti/dpll.txt     |   2 +
+ MAINTAINERS                                   |   1 +
+ arch/arm/boot/dts/ti/omap/am437x-cm-t43.dts   |  18 ++-
+ arch/arm/boot/dts/ti/omap/am43xx-clocks.dtsi  |  54 ++++++++-
+ drivers/clk/ti/dpll.c                         |   3 +
+ drivers/clk/ti/dpll3xxx.c                     |  26 +++--
+ drivers/net/ethernet/ti/davinci_mdio_cm_t43.c | 106 +++++-------------
+ drivers/net/mdio/Makefile                     |   1 +
+ drivers/net/mdio/fwnode_mdio.c                |  16 ++-
+ drivers/net/mdio/fwnode_mdio_cmt_43.c         |  56 +++++++++
+ drivers/net/mdio/fwnode_mdio_cmt_43.h         |  23 ++++
+ include/linux/clk/ti.h                        |   1 +
+ 12 files changed, 208 insertions(+), 99 deletions(-)
+ create mode 100644 drivers/net/mdio/fwnode_mdio_cmt_43.c
+ create mode 100644 drivers/net/mdio/fwnode_mdio_cmt_43.h
+
+diff --git a/Documentation/devicetree/bindings/clock/ti/dpll.txt b/Documentation/devicetree/bindings/clock/ti/dpll.txt
+index 14a1b72c2e71..f22c4070ec8f 100644
+--- a/Documentation/devicetree/bindings/clock/ti/dpll.txt
++++ b/Documentation/devicetree/bindings/clock/ti/dpll.txt
+@@ -52,6 +52,8 @@ Optional properties:
+ - DPLL mode setting - defining any one or more of the following overrides
+   default setting.
+ 	- ti,low-power-stop : DPLL supports low power stop mode, gating output
++	- ti,mn-bypass : DPLL uses MN bypass when its output rate matches the
++			 parent bypass clock
+ 	- ti,low-power-bypass : DPLL output matches rate of parent bypass clock
+ 	- ti,lock : DPLL locks in programmed rate
+ 	- ti,min-div : the minimum divisor to start from to round the DPLL
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 554e881b05be..404dc693ed80 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -25728,6 +25728,7 @@ L:	netdev@vger.kernel.org
+ S:	Maintained
+ F:	drivers/net/ethernet/ti/cpsw*
+ F:	drivers/net/ethernet/ti/davinci*
++F:	drivers/net/mdio/fwnode_mdio_cmt_43.*
+ 
+ TI FLASH MEDIA MEMORYSTICK/MMC DRIVERS
+ M:	Alex Dubov <oakad@yahoo.com>
+diff --git a/arch/arm/boot/dts/ti/omap/am437x-cm-t43.dts b/arch/arm/boot/dts/ti/omap/am437x-cm-t43.dts
+index 6af14994141f..dd84d6159c38 100644
+--- a/arch/arm/boot/dts/ti/omap/am437x-cm-t43.dts
++++ b/arch/arm/boot/dts/ti/omap/am437x-cm-t43.dts
+@@ -50,6 +50,8 @@ AM4372_IOPAD(0xa38, PIN_OUTPUT_PULLUP | MUX_MODE7) /* gpio5_8, PHY1 reset */
+ 			AM4372_IOPAD(0xa3c, PIN_INPUT_PULLUP | MUX_MODE7) /* gpio5_9, PHY1 IRQ */
+ 			AM4372_IOPAD(0xa40, PIN_OUTPUT_PULLUP | MUX_MODE7) /* gpio5_10, PHY0 rst */
+ 			AM4372_IOPAD(0xa44, PIN_INPUT_PULLUP | MUX_MODE7) /* gpio5_11, PHY0 IRQ */
++			/* xdma_event_intr1.clkout2 */
++			AM4372_IOPAD(0xa74, PIN_INPUT_PULLDOWN | MUX_MODE3)
+ 		>;
+ 	};
+ 
+@@ -343,14 +345,23 @@ &mac_sw {
+ 	status = "okay";
+ };
+ 
++&dpll_extdev_ck {
++	ti,mn-bypass;
++	ti,lock;
++};
++
+ &davinci_mdio_sw {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&davinci_mdio_default &phy_pins>;
++	clocks = <&cpsw_125mhz_gclk>, <&clkout2_ck>;
++	clock-names = "fck", "phy-ref";
++	assigned-clocks = <&clkout2_mux_ck>, <&dpll_extdev_m2_ck>;
++	assigned-clock-parents = <&dpll_extdev_m2_gate_ck>, <0>;
++	assigned-clock-rates = <0>, <2500000>;
+ 	compulab,cm-t43-phy-init;
+ 
+ 	ethphy0: ethernet-phy@4 {
+-		compatible = "ethernet-phy-id001c.c915",
+-			     "ethernet-phy-ieee802.3-c22";
++		compatible = "ethernet-phy-ieee802.3-c22";
+ 		reg = <4>;
+ 		reset-gpios = <&gpio5 10 GPIO_ACTIVE_LOW>;
+ 		reset-assert-us = <20000>;
+@@ -360,8 +371,7 @@ ethphy0: ethernet-phy@4 {
+ 	};
+ 
+ 	ethphy1: ethernet-phy@5 {
+-		compatible = "ethernet-phy-id001c.c915",
+-			     "ethernet-phy-ieee802.3-c22";
++		compatible = "ethernet-phy-ieee802.3-c22";
+ 		reg = <5>;
+ 		reset-gpios = <&gpio5 8 GPIO_ACTIVE_LOW>;
+ 		reset-assert-us = <20000>;
+diff --git a/arch/arm/boot/dts/ti/omap/am43xx-clocks.dtsi b/arch/arm/boot/dts/ti/omap/am43xx-clocks.dtsi
+index 9a5437b3d6a8..0d40f5abb944 100644
+--- a/arch/arm/boot/dts/ti/omap/am43xx-clocks.dtsi
++++ b/arch/arm/boot/dts/ti/omap/am43xx-clocks.dtsi
+@@ -644,10 +644,17 @@ dpll_extdev_m2_ck: clock-dpll-extdev-m2-8@2e70 {
+ 		clock-output-names = "dpll_extdev_m2_ck";
+ 		clocks = <&dpll_extdev_ck>;
+ 		ti,max-div = <127>;
+-		ti,autoidle-shift = <8>;
+ 		reg = <0x2e70>;
+ 		ti,index-starts-at-one;
+-		ti,invert-autoidle-bit;
++	};
++
++	dpll_extdev_m2_gate_ck: clock-dpll-extdev-m2-gate-8@2e70 {
++		#clock-cells = <0>;
++		compatible = "ti,gate-clock";
++		clock-output-names = "dpll_extdev_m2_gate_ck";
++		clocks = <&dpll_extdev_m2_ck>;
++		ti,bit-shift = <8>;
++		reg = <0x2e70>;
+ 	};
+ 
+ 	mux_synctimer32k_ck: clock-mux-synctimer32k@4230 {
+@@ -847,7 +854,8 @@ clkout1_mux_ck: clock-clkout1-mux-ck {
+ 		compatible = "ti,mux-clock";
+ 		clock-output-names = "clkout1_mux_ck";
+ 		clocks = <&clkout1_osc_div_ck>, <&clk_rc32k_ck>,
+-			 <&clkout1_src2_post_div_ck>, <&dpll_extdev_m2_ck>;
++			 <&clkout1_src2_post_div_ck>,
++			 <&dpll_extdev_m2_gate_ck>;
+ 		ti,bit-shift = <16>;
+ 		reg = <0x4100>;
+ 	};
+@@ -860,6 +868,46 @@ clkout1_ck: clock-clkout1-ck {
+ 		ti,bit-shift = <23>;
+ 		reg = <0x4100>;
+ 	};
++
++	clkout2_mux_ck: clock-clkout2-mux-ck {
++		#clock-cells = <0>;
++		compatible = "ti,mux-clock";
++		clock-output-names = "clkout2_mux_ck";
++		clocks = <&clk_32768_ck>, <&l3_gclk>, <&dpll_ddr_m2_ck>,
++			 <&dpll_per_m2_ck>, <&disp_clk>, <&dpll_mpu_m2_ck>,
++			 <&dpll_extdev_m2_gate_ck>;
++		reg = <0x4108>;
++	};
++
++	clkout2_div_ck: clock-clkout2-div-ck {
++		#clock-cells = <0>;
++		compatible = "ti,divider-clock";
++		clock-output-names = "clkout2_div_ck";
++		clocks = <&clkout2_mux_ck>;
++		ti,bit-shift = <4>;
++		ti,max-div = <8>;
++		reg = <0x4108>;
++	};
++
++	clkout2_post_div_ck: clock-clkout2-post-div-ck {
++		#clock-cells = <0>;
++		compatible = "ti,divider-clock";
++		clock-output-names = "clkout2_post_div_ck";
++		clocks = <&clkout2_div_ck>;
++		ti,bit-shift = <8>;
++		ti,max-div = <32>;
++		ti,index-power-of-two;
++		reg = <0x4108>;
++	};
++
++	clkout2_ck: clock-clkout2-ck {
++		#clock-cells = <0>;
++		compatible = "ti,gate-clock";
++		clock-output-names = "clkout2_ck";
++		clocks = <&clkout2_post_div_ck>;
++		ti,bit-shift = <16>;
++		reg = <0x4108>;
++	};
+ };
+ 
+ &prcm {
+diff --git a/drivers/clk/ti/dpll.c b/drivers/clk/ti/dpll.c
+index 971adafd9a8b..8addfcde876a 100644
+--- a/drivers/clk/ti/dpll.c
++++ b/drivers/clk/ti/dpll.c
+@@ -359,6 +359,9 @@ static void __init of_ti_dpll_setup(struct device_node *node,
+ 	if (of_property_read_bool(node, "ti,low-power-stop"))
+ 		dpll_mode |= 1 << DPLL_LOW_POWER_STOP;
+ 
++	if (of_property_read_bool(node, "ti,mn-bypass"))
++		dpll_mode |= 1 << DPLL_MN_BYPASS;
++
+ 	if (of_property_read_bool(node, "ti,low-power-bypass"))
+ 		dpll_mode |= 1 << DPLL_LOW_POWER_BYPASS;
+ 
+diff --git a/drivers/clk/ti/dpll3xxx.c b/drivers/clk/ti/dpll3xxx.c
+index 8c51b988a04f..58761e15e33a 100644
+--- a/drivers/clk/ti/dpll3xxx.c
++++ b/drivers/clk/ti/dpll3xxx.c
+@@ -172,29 +172,37 @@ static int _omap3_noncore_dpll_lock(struct clk_hw_omap *clk)
+  * _omap3_noncore_dpll_bypass - instruct a DPLL to bypass and wait for readiness
+  * @clk: pointer to a DPLL struct clk
+  *
+- * Instructs a non-CORE DPLL to enter low-power bypass mode.  In
+- * bypass mode, the DPLL's rate is set equal to its parent clock's
+- * rate.  Waits for the DPLL to report readiness before returning.
++ * Instructs a non-CORE DPLL to enter its configured bypass mode.  In
++ * bypass mode, the DPLL's rate is set equal to its parent clock's rate.
++ * MN bypass is preferred when the DPLL data advertises that mode;
++ * otherwise low-power bypass is used.  Waits for the DPLL to report
++ * readiness before returning.
+  * Will save and restore the DPLL's autoidle state across the enable,
+  * per the CDP code.  If the DPLL entered bypass mode successfully,
+  * return 0; if the DPLL did not enter bypass in the time allotted, or
+- * DPLL3 was passed in, or the DPLL does not support low-power bypass,
+- * return -EINVAL.
++ * DPLL3 was passed in, or the DPLL does not support a bypass mode, return
++ * -EINVAL.
+  */
+ static int _omap3_noncore_dpll_bypass(struct clk_hw_omap *clk)
+ {
+ 	int r;
+ 	u8 ai;
++	u8 mode;
+ 
+-	if (!(clk->dpll_data->modes & (1 << DPLL_LOW_POWER_BYPASS)))
++	if (clk->dpll_data->modes & (1 << DPLL_MN_BYPASS))
++		mode = DPLL_MN_BYPASS;
++	else if (clk->dpll_data->modes & (1 << DPLL_LOW_POWER_BYPASS))
++		mode = DPLL_LOW_POWER_BYPASS;
++	else
+ 		return -EINVAL;
+ 
+-	pr_debug("clock: configuring DPLL %s for low-power bypass\n",
+-		 clk_hw_get_name(&clk->hw));
++	pr_debug("clock: configuring DPLL %s for %s bypass\n",
++		 clk_hw_get_name(&clk->hw),
++		 mode == DPLL_MN_BYPASS ? "MN" : "low-power");
+ 
+ 	ai = omap3_dpll_autoidle_read(clk);
+ 
+-	_omap3_dpll_write_clken(clk, DPLL_LOW_POWER_BYPASS);
++	_omap3_dpll_write_clken(clk, mode);
+ 
+ 	r = _omap3_wait_dpll_status(clk, 0);
+ 
+diff --git a/drivers/net/ethernet/ti/davinci_mdio_cm_t43.c b/drivers/net/ethernet/ti/davinci_mdio_cm_t43.c
+index dff7c91c83af..5f65e8353730 100644
+--- a/drivers/net/ethernet/ti/davinci_mdio_cm_t43.c
++++ b/drivers/net/ethernet/ti/davinci_mdio_cm_t43.c
+@@ -1,101 +1,45 @@
+ // SPDX-License-Identifier: GPL-2.0
+-/* CompuLab CM-T43 Ethernet PHY clock and reset initialization. */
++/* CompuLab CM-T43 Ethernet PHY reference clock initialization. */
+ 
++#include <linux/clk.h>
+ #include <linux/delay.h>
+ #include <linux/device.h>
+-#include <linux/err.h>
+-#include <linux/gpio/consumer.h>
+-#include <linux/io.h>
+ #include <linux/module.h>
+-#include <linux/of.h>
+ 
+ #include "davinci_mdio_cm_t43.h"
+ 
+-#define CM_T43_CTRL_BASE	0x44e10000
+-#define CM_T43_CTRL_SIZE	0x1000
+-#define CM_T43_CLKOUT2_PAD	0x0a74
+-#define CM_T43_PRCM_BASE	0x44df0000
+-#define CM_T43_PRCM_SIZE	0x10000
+-#define CM_T43_DPLL_EXTDEV_MODE	0x2e60
+-#define CM_T43_DPLL_EXTDEV_CLKSEL	0x2e6c
+-#define CM_T43_DPLL_EXTDEV_M2	0x2e70
+-#define CM_T43_CLKOUT2_CTRL	0x4108
++static void davinci_mdio_cm_t43_disable_phy_clk(void *data)
++{
++	clk_disable_unprepare(data);
++}
+ 
+ int davinci_mdio_cm_t43_enable_phys(struct device *dev)
+ {
+-	struct gpio_desc *reset_gpios[2] = { NULL, NULL };
+-	struct device_node *child;
+-	void __iomem *ctrl_base;
+-	void __iomem *prcm_base;
+-	int count = 0;
+-	int ret = 0;
+-	int i;
+-
+-	ctrl_base = ioremap(CM_T43_CTRL_BASE, CM_T43_CTRL_SIZE);
+-	prcm_base = ioremap(CM_T43_PRCM_BASE, CM_T43_PRCM_SIZE);
+-	if (!ctrl_base || !prcm_base) {
+-		dev_err(dev, "failed to map CM-T43 PHY clock registers\n");
+-		ret = -ENOMEM;
+-		goto unmap;
+-	}
+-
+-	/* Restore the PHY reference clock configuration used by U-Boot. */
+-	writel(0x00040003, ctrl_base + CM_T43_CLKOUT2_PAD);
+-	writel(0x00010006, prcm_base + CM_T43_CLKOUT2_CTRL);
+-	writel(0x00000004, prcm_base + CM_T43_DPLL_EXTDEV_MODE);
+-	writel(0x02000009, prcm_base + CM_T43_DPLL_EXTDEV_CLKSEL);
+-	writel(0x0000038a, prcm_base + CM_T43_DPLL_EXTDEV_M2);
+-	readl(prcm_base + CM_T43_CLKOUT2_CTRL);
+-	fsleep(10000);
+-
+-	for_each_available_child_of_node(dev->of_node, child) {
+-		struct fwnode_handle *fwnode = of_fwnode_handle(child);
+-		struct gpio_desc *gpio;
++	struct clk *phy_clk;
++	int ret;
+ 
+-		if (count == ARRAY_SIZE(reset_gpios))
+-			continue;
++	phy_clk = devm_clk_get(dev, "phy-ref");
++	if (IS_ERR(phy_clk))
++		return dev_err_probe(dev, PTR_ERR(phy_clk),
++				     "failed to get CM-T43 PHY reference clock\n");
+ 
+-		gpio = fwnode_gpiod_get_index(fwnode, "reset", 0,
+-					      GPIOD_OUT_HIGH,
+-					      "CM-T43 PHY reset");
+-		if (IS_ERR(gpio)) {
+-			ret = dev_err_probe(dev, PTR_ERR(gpio),
+-					    "failed to assert PHY reset\n");
+-			of_node_put(child);
+-			goto release_gpios;
+-		}
+-		if (gpio)
+-			reset_gpios[count++] = gpio;
+-	}
++	ret = clk_prepare_enable(phy_clk);
++	if (ret)
++		return dev_err_probe(dev, ret,
++				     "failed to enable CM-T43 PHY reference clock\n");
+ 
+-	if (count != ARRAY_SIZE(reset_gpios)) {
+-		dev_err(dev, "expected two CM-T43 PHY reset GPIOs, found %d\n",
+-			count);
+-		ret = -ENODEV;
+-		goto release_gpios;
+-	}
++	ret = devm_add_action_or_reset(dev,
++				       davinci_mdio_cm_t43_disable_phy_clk,
++				       phy_clk);
++	if (ret)
++		return ret;
+ 
+-	msleep(20);
+-	for (i = 0; i < count; i++)
+-		gpiod_set_value_cansleep(reset_gpios[i], 0);
+-	msleep(100);
+-
+-	dev_info(dev,
+-		 "CM-T43 PHY clock/reset initialized: clkout2=%08x dpll=%08x pad=%08x\n",
+-		 readl(prcm_base + CM_T43_CLKOUT2_CTRL),
+-		 readl(prcm_base + CM_T43_DPLL_EXTDEV_MODE),
+-		 readl(ctrl_base + CM_T43_CLKOUT2_PAD));
++	fsleep(10000);
+ 
+-release_gpios:
+-	for (i = 0; i < count; i++)
+-		gpiod_put(reset_gpios[i]);
+-unmap:
+-	if (prcm_base)
+-		iounmap(prcm_base);
+-	if (ctrl_base)
+-		iounmap(ctrl_base);
++	dev_info(dev, "CM-T43 PHY reference clock enabled at %lu Hz\n",
++		 clk_get_rate(phy_clk));
+ 
+-	return ret;
++	return 0;
+ }
+ EXPORT_SYMBOL_GPL(davinci_mdio_cm_t43_enable_phys);
+ 
+diff --git a/drivers/net/mdio/Makefile b/drivers/net/mdio/Makefile
+index fbec636700e7..36519ca2fe5f 100644
+--- a/drivers/net/mdio/Makefile
++++ b/drivers/net/mdio/Makefile
+@@ -3,6 +3,7 @@
+ 
+ obj-$(CONFIG_ACPI_MDIO)		+= acpi_mdio.o
+ obj-$(CONFIG_FWNODE_MDIO)	+= fwnode_mdio.o
++obj-$(CONFIG_TI_DAVINCI_MDIO_CM_T43) += fwnode_mdio_cmt_43.o
+ obj-$(CONFIG_OF_MDIO)		+= of_mdio.o
+ 
+ obj-$(CONFIG_MDIO_AIROHA)		+= mdio-airoha.o
+diff --git a/drivers/net/mdio/fwnode_mdio.c b/drivers/net/mdio/fwnode_mdio.c
+index 9b41d4697a40..aa22c97d74e3 100644
+--- a/drivers/net/mdio/fwnode_mdio.c
++++ b/drivers/net/mdio/fwnode_mdio.c
+@@ -9,10 +9,13 @@
+ #include <linux/acpi.h>
+ #include <linux/dev_printk.h>
+ #include <linux/fwnode_mdio.h>
++#include <linux/gpio/consumer.h>
+ #include <linux/of.h>
+ #include <linux/phy.h>
+ #include <linux/pse-pd/pse.h>
+ 
++#include "fwnode_mdio_cmt_43.h"
++
+ MODULE_AUTHOR("Calvin Johnson <calvin.johnson@oss.nxp.com>");
+ MODULE_LICENSE("GPL");
+ MODULE_DESCRIPTION("FWNODE MDIO bus (Ethernet PHY) accessors");
+@@ -125,6 +128,7 @@ int fwnode_mdiobus_register_phy(struct mii_bus *bus,
+ 	struct mii_timestamper *mii_ts = NULL;
+ 	struct pse_control *psec = NULL;
+ 	struct phy_device *phy;
++	struct gpio_desc *reset_gpio;
+ 	bool is_c45;
+ 	u32 phy_id;
+ 	int rc;
+@@ -134,10 +138,18 @@ int fwnode_mdiobus_register_phy(struct mii_bus *bus,
+ 		return PTR_ERR(mii_ts);
+ 
+ 	is_c45 = fwnode_device_is_compatible(child, "ethernet-phy-ieee802.3-c45");
+-	if (is_c45 || fwnode_get_phy_id(child, &phy_id))
++	if (is_c45 || fwnode_get_phy_id(child, &phy_id)) {
++		reset_gpio = fwnode_mdio_cmt_43_phy_reset(bus, child);
++		if (IS_ERR(reset_gpio)) {
++			rc = PTR_ERR(reset_gpio);
++			goto clean_mii_ts;
++		}
++
+ 		phy = get_phy_device(bus, addr, is_c45);
+-	else
++		gpiod_put(reset_gpio);
++	} else {
+ 		phy = phy_device_create(bus, addr, phy_id, 0, NULL);
++	}
+ 	if (IS_ERR(phy)) {
+ 		rc = PTR_ERR(phy);
+ 		goto clean_mii_ts;
+diff --git a/drivers/net/mdio/fwnode_mdio_cmt_43.c b/drivers/net/mdio/fwnode_mdio_cmt_43.c
+new file mode 100644
+index 000000000000..c3df0d0f8af6
+--- /dev/null
++++ b/drivers/net/mdio/fwnode_mdio_cmt_43.c
+@@ -0,0 +1,56 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* CompuLab CM-T43 PHY reset handling before MDIO discovery. */
++
++#include <linux/delay.h>
++#include <linux/device.h>
++#include <linux/err.h>
++#include <linux/gpio/consumer.h>
++#include <linux/module.h>
++#include <linux/phy.h>
++#include <linux/property.h>
++
++#include "fwnode_mdio_cmt_43.h"
++
++#define CMT_43_PHY_INIT_PROPERTY "compulab,cm-t43-phy-init"
++
++struct gpio_desc *fwnode_mdio_cmt_43_phy_reset(struct mii_bus *bus,
++					       struct fwnode_handle *child)
++{
++	struct fwnode_handle *bus_fwnode = dev_fwnode(&bus->dev);
++	struct gpio_desc *reset_gpio;
++	u32 assert_delay = 0;
++	u32 deassert_delay = 0;
++
++	if (!bus_fwnode ||
++	    !fwnode_property_read_bool(bus_fwnode, CMT_43_PHY_INIT_PROPERTY))
++		return NULL;
++
++	if (!IS_ENABLED(CONFIG_GPIOLIB))
++		return NULL;
++
++	reset_gpio = fwnode_gpiod_get_index(child, "reset", 0,
++					    GPIOD_OUT_HIGH, "PHY reset");
++	if (IS_ERR(reset_gpio)) {
++		if (PTR_ERR(reset_gpio) == -ENOENT)
++			return NULL;
++
++		return reset_gpio;
++	}
++
++	fwnode_property_read_u32(child, "reset-assert-us", &assert_delay);
++	fwnode_property_read_u32(child, "reset-deassert-us", &deassert_delay);
++
++	if (assert_delay)
++		fsleep(assert_delay);
++
++	gpiod_set_value_cansleep(reset_gpio, 0);
++
++	if (deassert_delay)
++		fsleep(deassert_delay);
++
++	return reset_gpio;
++}
++EXPORT_SYMBOL_GPL(fwnode_mdio_cmt_43_phy_reset);
++
++MODULE_DESCRIPTION("CompuLab CM-T43 pre-discovery PHY reset");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/net/mdio/fwnode_mdio_cmt_43.h b/drivers/net/mdio/fwnode_mdio_cmt_43.h
+new file mode 100644
+index 000000000000..808881c032fd
+--- /dev/null
++++ b/drivers/net/mdio/fwnode_mdio_cmt_43.h
+@@ -0,0 +1,23 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef __FWNODE_MDIO_CMT_43_H__
++#define __FWNODE_MDIO_CMT_43_H__
++
++#include <linux/kconfig.h>
++#include <linux/stddef.h>
++
++struct fwnode_handle;
++struct gpio_desc;
++struct mii_bus;
++
++#if IS_ENABLED(CONFIG_TI_DAVINCI_MDIO_CM_T43)
++struct gpio_desc *fwnode_mdio_cmt_43_phy_reset(struct mii_bus *bus,
++					       struct fwnode_handle *child);
++#else
++static inline struct gpio_desc *fwnode_mdio_cmt_43_phy_reset(struct mii_bus *bus,
++							     struct fwnode_handle *child)
++{
++	return NULL;
++}
++#endif
++
++#endif /* __FWNODE_MDIO_CMT_43_H__ */
+diff --git a/include/linux/clk/ti.h b/include/linux/clk/ti.h
+index 54a3fa370004..404c06105d55 100644
+--- a/include/linux/clk/ti.h
++++ b/include/linux/clk/ti.h
+@@ -209,6 +209,7 @@ struct clk_hw_omap {
+ 
+ /* CM_CLKEN_PLL*.EN* bit values - not all are available for every DPLL */
+ #define DPLL_LOW_POWER_STOP	0x1
++#define DPLL_MN_BYPASS		0x4
+ #define DPLL_LOW_POWER_BYPASS	0x5
+ #define DPLL_LOCKED		0x7
+ 
+-- 
+2.43.0
+
